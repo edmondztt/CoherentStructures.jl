@@ -351,18 +351,14 @@ function spdist(data::AbstractVector{<:AbstractVector{<:SVector}}, sp_method::Ne
 	I1 = collect(1:N)
 	J1 = collect(1:N)
 	V1 = zeros(T, N)
-	IJV = Distributed.pmap(1:N) do j
-		Is, Js, Vs = Int[], Int[], T[]
-		@inbounds aj = data[j]
-        @inbounds for i = (j + 1):N
-            temp = Dists.evaluate(metric, data[i], aj)
-			if temp < sp_method.ε
-				push!(Is, i, j)
-				push!(Js, j, i)
-				push!(Vs, temp, temp)
-			end
-        end
-		Is, Js, Vs
+	mapfun = Distributed.nprocs() > 1 ? Distributed.pmap : map
+	IJV = mapfun(collect(1:(N-1))) do j
+		aj = data[j]
+        temp = Dists.colwise(metric, aj, data[(j+1):N])
+		Is = findall(x -> x < sp_method.ε, temp)
+		Js = fill(j, length(Is))
+		temp2 = temp[Is]
+		vcat(Is, Js), vcat(Js, Is), vcat(temp2, temp2)
 	end
 	Is = vcat(I1, getindex.(IJV, 1)...)
 	Js = vcat(J1, getindex.(IJV, 2)...)
@@ -379,7 +375,7 @@ function spdist(data::AbstractVector{<:AbstractVector{<:SVector}}, sp_method::Un
 	ds = Vector{T}(undef, N)
     # Distributed.@everywhere index = Vector{Int}(undef, k+1)
     @inbounds @sync Distributed.@distributed for i=1:N
-		colwise!(ds, metric, data[i], data)
+		Dists.colwise!(ds, metric, data[i], data)
         index = partialsortperm(ds, 1:(k+1))
         Is[(i-1)*(k+1)+1:i*(k+1)] .= i
         Js[(i-1)*(k+1)+1:i*(k+1)] = index
